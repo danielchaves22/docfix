@@ -1,373 +1,228 @@
 #!/usr/bin/env node
-import fs from 'node:fs/promises';
+import { spawnSync } from 'node:child_process';
 import path from 'node:path';
-import process from 'node:process';
-import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-const contractsRoot = path.resolve(__dirname, '..');
 
-const OPENAPI_PATH = path.join(contractsRoot, 'openapi', 'openapi.yaml');
-const SCHEMAS_DIR = path.join(contractsRoot, 'schemas');
-const EXAMPLES_DIR = path.join(contractsRoot, 'examples');
+const pythonCode = String.raw`
+import datetime as dt
+import json
+import pathlib
+import re
+import sys
+import uuid
 
-const failures = [];
+try:
+    import yaml
+except Exception as exc:
+    print(f"❌ Dependência ausente: pyyaml ({exc})", file=sys.stderr)
+    sys.exit(1)
 
-function addFailure(area, message) {
-  failures.push({ area, message });
-}
+try:
+    from jsonschema import Draft202012Validator, FormatChecker
+except Exception as exc:
+    print(f"❌ Dependência ausente: jsonschema ({exc})", file=sys.stderr)
+    sys.exit(1)
 
-async function collectFilesBySuffix(dirPath, suffix) {
-  const entries = await fs.readdir(dirPath, { withFileTypes: true });
-  const files = [];
+contracts_root = pathlib.Path(sys.argv[1])
+openapi_path = contracts_root / "openapi" / "openapi.yaml"
+schemas_dir = contracts_root / "schemas"
+examples_dir = contracts_root / "examples"
 
-  for (const entry of entries) {
-    const fullPath = path.join(dirPath, entry.name);
-    if (entry.isDirectory()) {
-      files.push(...(await collectFilesBySuffix(fullPath, suffix)));
-    } else if (entry.isFile() && entry.name.endsWith(suffix)) {
-      files.push(fullPath);
-    }
-  }
+failures = []
 
-  return files.sort();
-}
+def add_failure(area, message):
+    failures.append((area, message))
 
-async function collectExampleFiles(rootDir, folderName) {
-  const entries = await fs.readdir(rootDir, { withFileTypes: true });
-  const files = [];
+def lint_openapi(doc):
+    issues = []
+    if not str(doc.get("openapi", "")).startswith("3."):
+        issues.append('Campo "openapi" precisa iniciar em versão 3.x.')
+    if not doc.get("info", {}).get("title"):
+        issues.append("Campo obrigatório ausente: info.title")
+    if not doc.get("info", {}).get("version"):
+        issues.append("Campo obrigatório ausente: info.version")
 
-  for (const entry of entries) {
-    const fullPath = path.join(rootDir, entry.name);
-    if (!entry.isDirectory()) continue;
+    paths = doc.get("paths", {})
+    if not isinstance(paths, dict) or len(paths) == 0:
+        issues.append("Nenhum path definido em paths")
 
-    if (entry.name === folderName) {
-      files.push(...(await collectFilesBySuffix(fullPath, '.json')));
-      continue;
-    }
+    methods = {"get", "post", "put", "patch", "delete", "options", "head", "trace"}
+    for route, route_def in paths.items():
+        if not isinstance(route_def, dict):
+            continue
+        for method, operation in route_def.items():
+            if method not in methods or not isinstance(operation, dict):
+                continue
+            if not operation.get("summary"):
+                issues.append(f"Operação {method.upper()} {route} sem summary")
+            responses = operation.get("responses")
+            if not isinstance(responses, dict) or len(responses) == 0:
+                issues.append(f"Operação {method.upper()} {route} sem responses")
+    return issues
 
-    files.push(...(await collectExampleFiles(fullPath, folderName)));
-  }
+def schema_key_from_filename(file_name):
+    m = re.match(r"^(?P<name>.+)\.v(?P<version>\d+)\.schema\.json$", file_name)
+    if not m:
+        return None
+    return f"{m.group('name').upper()}@{m.group('version')}"
 
-  return files.sort();
-}
+def infer_schema_key_from_example_path(example_file):
+    rel = example_file.relative_to(examples_dir)
+    parts = rel.parts
+    if len(parts) < 3:
+        return None
+    schema_name = parts[0]
+    version_dir = parts[1]
+    m = re.match(r"^v(\d+)$", version_dir)
+    if not m:
+        return None
+    return f"{schema_name.upper()}@{m.group(1)}"
 
-function parseYamlWithRuby(filePath) {
-  const rubyCode = `
-    require 'yaml'
-    require 'json'
-    doc = YAML.safe_load(File.read(ARGV[0]), aliases: true)
-    puts JSON.generate(doc)
-  `;
+format_checker = FormatChecker()
 
-  const output = execFileSync('ruby', ['-e', rubyCode, filePath], { encoding: 'utf-8' });
-  return JSON.parse(output);
-}
+@format_checker.checks("date")
+def is_date(value):
+    if not isinstance(value, str):
+        return False
+    if not re.match(r"^\d{4}-\d{2}-\d{2}$", value):
+        return False
+    try:
+        dt.date.fromisoformat(value)
+        return True
+    except ValueError:
+        return False
 
-function lintOpenApi(doc) {
-  const issues = [];
-  if (!doc.openapi || !String(doc.openapi).startsWith('3.')) {
-    issues.push('Campo openapi ausente ou fora da versão 3.x.');
-  }
-  if (!doc.info?.title) issues.push('Campo obrigatório ausente: info.title.');
-  if (!doc.info?.version) issues.push('Campo obrigatório ausente: info.version.');
-  if (!doc.paths || Object.keys(doc.paths).length === 0) issues.push('Nenhum path definido em paths.');
+@format_checker.checks("date-time")
+def is_datetime(value):
+    if not isinstance(value, str):
+        return False
+    if not re.match(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$", value):
+        return False
+    normalized = value[:-1] + "+00:00" if value.endswith("Z") else value
+    try:
+        dt.datetime.fromisoformat(normalized)
+        return True
+    except ValueError:
+        return False
 
-  const methods = ['get', 'post', 'put', 'patch', 'delete', 'options', 'head', 'trace'];
-  for (const [route, routeDef] of Object.entries(doc.paths ?? {})) {
-    for (const method of methods) {
-      const operation = routeDef?.[method];
-      if (!operation) continue;
-      if (!operation.summary) issues.push(`Operação ${method.toUpperCase()} ${route} sem summary.`);
-      if (!operation.responses || Object.keys(operation.responses).length === 0) {
-        issues.push(`Operação ${method.toUpperCase()} ${route} sem responses.`);
-      }
-    }
-  }
+@format_checker.checks("uuid")
+def is_uuid(value):
+    if not isinstance(value, str):
+        return False
+    try:
+        uuid.UUID(value)
+        return True
+    except ValueError:
+        return False
 
-  return issues;
-}
+# 1) OpenAPI
+try:
+    with open(openapi_path, "r", encoding="utf-8") as f:
+        openapi_doc = yaml.safe_load(f)
+except Exception as exc:
+    add_failure("openapi", f"Falha ao parsear OpenAPI: {exc}")
+else:
+    for issue in lint_openapi(openapi_doc or {}):
+        add_failure("openapi", issue)
+    if not [f for f in failures if f[0] == "openapi"]:
+        print("✅ OpenAPI parse + lint básico concluído.")
 
-function keyFromFileName(fileName) {
-  const match = fileName.match(/^(?<name>.+)\.v(?<version>\d+)\.schema\.json$/);
-  if (!match?.groups) return null;
-  return `${match.groups.name.toUpperCase()}@${match.groups.version}`;
-}
+# 2) Schemas
+schema_index = {}
+for schema_file in sorted(schemas_dir.glob("*.schema.json")):
+    rel = schema_file.relative_to(contracts_root)
+    try:
+        schema_doc = json.loads(schema_file.read_text(encoding="utf-8"))
+    except Exception as exc:
+        add_failure("schemas", f"Falha de parse em {rel}: {exc}")
+        continue
 
-function resolveRef(rootSchema, ref) {
-  if (!ref.startsWith('#/')) return null;
-  const parts = ref.slice(2).split('/').map((part) => part.replace(/~1/g, '/').replace(/~0/g, '~'));
-  let node = rootSchema;
-  for (const part of parts) {
-    if (node && typeof node === 'object' && part in node) {
-      node = node[part];
-    } else {
-      return null;
-    }
-  }
-  return node;
-}
+    if schema_doc.get("$schema") != "https://json-schema.org/draft/2020-12/schema":
+        add_failure("schemas", f"{rel} não declara $schema draft 2020-12")
+        continue
 
-function isObject(value) {
-  return value !== null && typeof value === 'object' && !Array.isArray(value);
-}
+    try:
+        Draft202012Validator.check_schema(schema_doc)
+    except Exception as exc:
+        add_failure("schemas", f"Schema inválido no metaschema 2020-12 ({rel}): {exc}")
+        continue
 
-function isValidDate(value) {
-  if (typeof value !== 'string') return false;
-  const match = value.match(/^(\d{4})-(\d{2})-(\d{2})$/);
-  if (!match) return false;
-  const month = Number(match[2]);
-  const day = Number(match[3]);
-  return month >= 1 && month <= 12 && day >= 1 && day <= 31;
-}
+    schema_id = schema_doc.get("properties", {}).get("schemaId", {}).get("const")
+    schema_version = schema_doc.get("properties", {}).get("schemaVersion", {}).get("const")
+    key = f"{schema_id}@{schema_version}" if isinstance(schema_id, str) and isinstance(schema_version, int) else schema_key_from_filename(schema_file.name)
 
-function isValidDateTime(value) {
-  if (typeof value !== 'string') return false;
-  if (!/^\d{4}-\d{2}-\d{2}T/.test(value)) return false;
-  const parsed = Date.parse(value);
-  return !Number.isNaN(parsed);
-}
+    if not key:
+        add_failure("schemas", f"Não foi possível inferir schemaId/schemaVersion em {rel}")
+        continue
+    if key in schema_index:
+        add_failure("schemas", f"Schema duplicado para chave {key} ({rel})")
+        continue
 
-function validateInstance(instance, schema, rootSchema, instancePath = '$') {
-  let currentSchema = schema;
-  if (currentSchema?.$ref) {
-    const resolved = resolveRef(rootSchema, currentSchema.$ref);
-    if (!resolved) {
-      return [{ path: instancePath, message: `Referência não resolvida: ${currentSchema.$ref}` }];
-    }
-    currentSchema = resolved;
-  }
+    schema_index[key] = (schema_doc, rel)
 
-  const errors = [];
+if schema_index and not [f for f in failures if f[0] == "schemas"]:
+    print("✅ JSON Schemas parseados e validados contra metaschema 2020-12.")
 
-  if (Object.prototype.hasOwnProperty.call(currentSchema ?? {}, 'const') && instance !== currentSchema.const) {
-    errors.push({ path: instancePath, message: `deve ser constante ${JSON.stringify(currentSchema.const)}` });
-    return errors;
-  }
+# 3) Examples
 
-  if (currentSchema?.enum && !currentSchema.enum.includes(instance)) {
-    errors.push({ path: instancePath, message: `deve estar em enum ${JSON.stringify(currentSchema.enum)}` });
-  }
+def collect_examples(folder_name):
+    return sorted(examples_dir.glob(f"**/{folder_name}/*.json"))
 
-  if (currentSchema?.type) {
-    const expected = currentSchema.type;
-    const typeOk =
-      (expected === 'object' && isObject(instance)) ||
-      (expected === 'array' && Array.isArray(instance)) ||
-      (expected === 'string' && typeof instance === 'string') ||
-      (expected === 'number' && typeof instance === 'number') ||
-      (expected === 'integer' && Number.isInteger(instance)) ||
-      (expected === 'boolean' && typeof instance === 'boolean') ||
-      (expected === 'null' && instance === null);
+def run_example_validation(files, should_pass):
+    for file in files:
+        rel = file.relative_to(contracts_root)
+        try:
+            instance = json.loads(file.read_text(encoding="utf-8"))
+        except Exception as exc:
+            add_failure("examples", f"Falha de parse em {rel}: {exc}")
+            continue
 
-    if (!typeOk) {
-      errors.push({ path: instancePath, message: `tipo inválido: esperado ${expected}` });
-      return errors;
-    }
-  }
+        explicit_key = f"{instance.get('schemaId')}@{instance.get('schemaVersion')}"
+        fallback_key = infer_schema_key_from_example_path(file)
+        schema_data = schema_index.get(explicit_key) or (schema_index.get(fallback_key) if fallback_key else None)
 
-  if (typeof instance === 'number') {
-    if (typeof currentSchema?.minimum === 'number' && instance < currentSchema.minimum) {
-      errors.push({ path: instancePath, message: `deve ser >= ${currentSchema.minimum}` });
-    }
-    if (typeof currentSchema?.maximum === 'number' && instance > currentSchema.maximum) {
-      errors.push({ path: instancePath, message: `deve ser <= ${currentSchema.maximum}` });
-    }
-  }
+        if not schema_data:
+            add_failure("examples", f"Schema não encontrado para {rel}. Esperado: {explicit_key} ou {fallback_key}")
+            continue
 
-  if (typeof instance === 'string') {
-    if (typeof currentSchema?.maxLength === 'number' && instance.length > currentSchema.maxLength) {
-      errors.push({ path: instancePath, message: `tamanho máximo ${currentSchema.maxLength}` });
-    }
-    if (typeof currentSchema?.pattern === 'string') {
-      const regex = new RegExp(currentSchema.pattern);
-      if (!regex.test(instance)) {
-        errors.push({ path: instancePath, message: `não atende ao pattern ${currentSchema.pattern}` });
-      }
-    }
-    if (currentSchema?.format === 'date' && !isValidDate(instance)) {
-      errors.push({ path: instancePath, message: 'format date inválido' });
-    }
-    if (currentSchema?.format === 'date-time' && !isValidDateTime(instance)) {
-      errors.push({ path: instancePath, message: 'format date-time inválido' });
-    }
-    if (currentSchema?.format === 'uuid' && !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(instance)) {
-      errors.push({ path: instancePath, message: 'format uuid inválido' });
-    }
-  }
+        schema_doc, schema_rel = schema_data
+        validator = Draft202012Validator(schema_doc, format_checker=format_checker)
+        errors = sorted(validator.iter_errors(instance), key=lambda e: e.json_path)
 
-  if (Array.isArray(instance)) {
-    if (typeof currentSchema?.minItems === 'number' && instance.length < currentSchema.minItems) {
-      errors.push({ path: instancePath, message: `mínimo de itens ${currentSchema.minItems}` });
-    }
-    if (typeof currentSchema?.maxItems === 'number' && instance.length > currentSchema.maxItems) {
-      errors.push({ path: instancePath, message: `máximo de itens ${currentSchema.maxItems}` });
-    }
-    if (currentSchema?.items) {
-      instance.forEach((item, index) => {
-        errors.push(...validateInstance(item, currentSchema.items, rootSchema, `${instancePath}/${index}`));
-      });
-    }
-  }
+        if should_pass and errors:
+            msg = "; ".join([f"{e.json_path}: {e.message}" for e in errors])
+            add_failure("examples", f"Exemplo válido reprovado ({rel}) contra {schema_rel}: {msg}")
+        if not should_pass and not errors:
+            add_failure("examples", f"Exemplo inválido passou indevidamente ({rel})")
 
-  if (isObject(instance)) {
-    for (const requiredKey of currentSchema?.required ?? []) {
-      if (!Object.prototype.hasOwnProperty.call(instance, requiredKey)) {
-        errors.push({ path: `${instancePath}/${requiredKey}`, message: 'propriedade obrigatória ausente' });
-      }
-    }
+run_example_validation(collect_examples("valid"), True)
+run_example_validation(collect_examples("invalid"), False)
 
-    const properties = currentSchema?.properties ?? {};
-    if (currentSchema?.additionalProperties === false) {
-      for (const key of Object.keys(instance)) {
-        if (!Object.prototype.hasOwnProperty.call(properties, key)) {
-          errors.push({ path: `${instancePath}/${key}`, message: 'propriedade adicional não permitida' });
-        }
-      }
-    }
+if not [f for f in failures if f[0] == "examples"]:
+    print("✅ Exemplos valid/invalid validados com sucesso.")
 
-    for (const [key, propertySchema] of Object.entries(properties)) {
-      if (Object.prototype.hasOwnProperty.call(instance, key)) {
-        errors.push(...validateInstance(instance[key], propertySchema, rootSchema, `${instancePath}/${key}`));
-      }
-    }
-  }
+if failures:
+    print("\n❌ Falhas encontradas na validação de contracts:", file=sys.stderr)
+    for area, message in failures:
+        print(f"- [{area}] {message}", file=sys.stderr)
+    sys.exit(1)
 
-  return errors;
-}
+print("\n✅ Contracts validados com sucesso.")
+`;
 
-async function validateOpenApi() {
-  try {
-    const doc = parseYamlWithRuby(OPENAPI_PATH);
-    const issues = lintOpenApi(doc);
-    issues.forEach((issue) => addFailure('openapi', issue));
-    if (issues.length === 0) {
-      console.log('✅ OpenAPI parseado e lint básico concluído.');
-    }
-  } catch (error) {
-    addFailure('openapi', `Falha de parse/validação do OpenAPI: ${error.message}`);
-  }
-}
-
-async function loadSchemas() {
-  const schemaFiles = await collectFilesBySuffix(SCHEMAS_DIR, '.schema.json');
-  const schemaIndex = new Map();
-
-  for (const filePath of schemaFiles) {
-    const relPath = path.relative(contractsRoot, filePath);
-    let schemaDoc;
-    try {
-      schemaDoc = JSON.parse(await fs.readFile(filePath, 'utf-8'));
-    } catch (error) {
-      addFailure('schemas', `Falha de parse em ${relPath}: ${error.message}`);
-      continue;
-    }
-
-    if (schemaDoc.$schema !== 'https://json-schema.org/draft/2020-12/schema') {
-      addFailure('schemas', `${relPath} não declara $schema draft 2020-12.`);
-      continue;
-    }
-
-    const schemaIdConst = schemaDoc?.properties?.schemaId?.const;
-    const schemaVersionConst = schemaDoc?.properties?.schemaVersion?.const;
-    const fallbackKey = keyFromFileName(path.basename(filePath));
-    const schemaKey = typeof schemaIdConst === 'string' && Number.isInteger(schemaVersionConst)
-      ? `${schemaIdConst}@${schemaVersionConst}`
-      : fallbackKey;
-
-    if (!schemaKey) {
-      addFailure('schemas', `Não foi possível inferir chave do schema em ${relPath}.`);
-      continue;
-    }
-
-    schemaIndex.set(schemaKey, schemaDoc);
-  }
-
-  if (schemaFiles.length > 0 && failures.every((f) => f.area !== 'schemas')) {
-    console.log('✅ JSON Schemas parseados e identificados como draft 2020-12.');
-  }
-
-  return schemaIndex;
-}
-
-function formatErrors(errors) {
-  return errors.map((error) => `${error.path}: ${error.message}`).join('; ');
-}
-
-async function validateExamples(schemaIndex) {
-  const validFiles = await collectExampleFiles(EXAMPLES_DIR, 'valid');
-  const invalidFiles = await collectExampleFiles(EXAMPLES_DIR, 'invalid');
-
-  for (const filePath of validFiles) {
-    const relPath = path.relative(contractsRoot, filePath);
-    let data;
-    try {
-      data = JSON.parse(await fs.readFile(filePath, 'utf-8'));
-    } catch (error) {
-      addFailure('examples', `Falha de parse em ${relPath}: ${error.message}`);
-      continue;
-    }
-
-    const schemaKey = `${data?.schemaId}@${data?.schemaVersion}`;
-    const schema = schemaIndex.get(schemaKey);
-    if (!schema) {
-      addFailure('examples', `Schema não encontrado para ${relPath}. Esperado ${schemaKey}.`);
-      continue;
-    }
-
-    const errors = validateInstance(data, schema, schema);
-    if (errors.length > 0) {
-      addFailure('examples', `Exemplo válido reprovado (${relPath}): ${formatErrors(errors)}`);
-    }
-  }
-
-  for (const filePath of invalidFiles) {
-    const relPath = path.relative(contractsRoot, filePath);
-    let data;
-    try {
-      data = JSON.parse(await fs.readFile(filePath, 'utf-8'));
-    } catch (error) {
-      addFailure('examples', `Falha de parse em ${relPath}: ${error.message}`);
-      continue;
-    }
-
-    const schemaKey = `${data?.schemaId}@${data?.schemaVersion}`;
-    const schema = schemaIndex.get(schemaKey);
-    if (!schema) {
-      continue;
-    }
-
-    const errors = validateInstance(data, schema, schema);
-    if (errors.length === 0) {
-      addFailure('examples', `Exemplo inválido passou indevidamente (${relPath}).`);
-    }
-  }
-
-  if (failures.every((f) => f.area !== 'examples')) {
-    console.log('✅ Exemplos valid/invalid validados com sucesso.');
-  }
-}
-
-async function main() {
-  await validateOpenApi();
-  const schemaIndex = await loadSchemas();
-  await validateExamples(schemaIndex);
-
-  if (failures.length > 0) {
-    console.error('\n❌ Falhas encontradas na validação de contracts:');
-    for (const failure of failures) {
-      console.error(`- [${failure.area}] ${failure.message}`);
-    }
-    process.exitCode = 1;
-    return;
-  }
-
-  console.log('\n✅ Contracts validados com sucesso.');
-}
-
-main().catch((error) => {
-  console.error('❌ Erro inesperado:', error);
-  process.exit(1);
+const result = spawnSync('python', ['-c', pythonCode, path.resolve(__dirname, '..')], {
+  encoding: 'utf-8',
 });
+
+if (result.stdout) process.stdout.write(result.stdout);
+if (result.stderr) process.stderr.write(result.stderr);
+
+if (result.error) {
+  console.error('❌ Falha ao executar o validador Python:', result.error.message);
+  process.exit(1);
+}
+
+process.exit(result.status ?? 1);
