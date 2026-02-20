@@ -1,0 +1,1 @@
+"""Pacote inicial do worker."""

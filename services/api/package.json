@@ -1,0 +1,11 @@
+{
+  "name": "@docfix/api",
+  "private": true,
+  "version": "0.1.0",
+  "scripts": {
+    "dev": "node -e \"console.log('API scaffold pronto. Implemente o servidor em services/api/src.')\"",
+    "lint": "node -e \"console.log('placeholder lint api')\"",
+    "test": "node -e \"console.log('placeholder test api')\"",
+    "build": "node -e \"console.log('placeholder build api')\""
+  }
+}
