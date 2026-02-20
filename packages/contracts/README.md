@@ -46,5 +46,5 @@ O comando valida, em sequência:
 2) `schemas/*.schema.json` (parse + validação no draft 2020-12).
 3) `examples/**/valid/*.json` (devem passar) e `examples/**/invalid/*.json` (devem falhar).
 
-A validação usa AJV com `ajv-formats`, então `format` (ex.: `date`, `date-time`) e `pattern` são aplicados.
+A validação usa `jsonschema` (draft 2020-12) com `FormatChecker`, então `format` (ex.: `date`, `date-time`, `uuid`) e `pattern` são aplicados.
 Se qualquer etapa falhar, o script encerra com exit code diferente de zero.
