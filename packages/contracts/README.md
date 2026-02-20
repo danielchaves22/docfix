@@ -33,3 +33,18 @@ Recomendação de CI:
 - Geração:
   - tipos TS a partir do OpenAPI
   - modelos Python a partir dos JSON Schemas (opcional)
+
+## Validação automatizada dos contracts
+Execute na raiz do monorepo:
+
+```bash
+pnpm contracts:check
+```
+
+O comando valida, em sequência:
+1) `openapi/openapi.yaml` (parse + validação + lint básico de estrutura/operações).
+2) `schemas/*.schema.json` (parse + validação no draft 2020-12).
+3) `examples/**/valid/*.json` (devem passar) e `examples/**/invalid/*.json` (devem falhar).
+
+A validação usa AJV com `ajv-formats`, então `format` (ex.: `date`, `date-time`) e `pattern` são aplicados.
+Se qualquer etapa falhar, o script encerra com exit code diferente de zero.
