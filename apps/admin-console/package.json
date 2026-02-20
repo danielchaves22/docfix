@@ -1,0 +1,11 @@
+{
+  "name": "@docfix/admin-console",
+  "private": true,
+  "version": "0.1.0",
+  "scripts": {
+    "dev": "node -e \"console.log('Admin console scaffold pronta. Inicialize Next.js em apps/admin-console.')\"",
+    "lint": "node -e \"console.log('placeholder lint admin')\"",
+    "test": "node -e \"console.log('placeholder test admin')\"",
+    "build": "node -e \"console.log('placeholder build admin')\""
+  }
+}
