@@ -1,0 +1,101 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.com/schemas/cartao_ponto/v1",
+  "title": "CARTAO_PONTO@v1",
+  "type": "object",
+  "required": ["schemaId", "schemaVersion", "jobId", "extractedAt", "days"],
+  "properties": {
+    "schemaId": { "const": "CARTAO_PONTO" },
+    "schemaVersion": { "const": 1 },
+    "jobId": { "type": "string", "format": "uuid" },
+    "extractedAt": { "type": "string", "format": "date-time" },
+    "timezone": { "type": "string" },
+    "employee": {
+      "type": "object",
+      "properties": {
+        "name": { "type": "string" },
+        "documentId": { "type": "string" },
+        "employerName": { "type": "string" }
+      },
+      "additionalProperties": false
+    },
+    "period": {
+      "type": "object",
+      "properties": {
+        "startDate": { "type": "string", "format": "date" },
+        "endDate": { "type": "string", "format": "date" }
+      },
+      "additionalProperties": false
+    },
+    "days": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/Day" }
+    },
+    "summary": {
+      "type": "object",
+      "properties": {
+        "totalDays": { "type": "integer", "minimum": 0 },
+        "daysWithIssues": { "type": "integer", "minimum": 0 }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "Day": {
+      "type": "object",
+      "required": ["date", "punches"],
+      "properties": {
+        "date": { "type": "string", "format": "date" },
+        "punches": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/Punch" }
+        },
+        "notes": { "type": "string" },
+        "dayConfidence": { "type": "number", "minimum": 0, "maximum": 1 },
+        "issues": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/Issue" }
+        }
+      },
+      "additionalProperties": false
+    },
+    "Punch": {
+      "type": "object",
+      "required": ["time", "type"],
+      "properties": {
+        "time": {
+          "type": "string",
+          "pattern": "^(?:[01]\\d|2[0-3]):[0-5]\\d$"
+        },
+        "type": { "type": "string", "enum": ["IN", "OUT", "UNKNOWN"] },
+        "source": { "$ref": "#/$defs/Source" }
+      },
+      "additionalProperties": false
+    },
+    "Source": {
+      "type": "object",
+      "properties": {
+        "page": { "type": "integer", "minimum": 0 },
+        "bbox": {
+          "type": "array",
+          "minItems": 4,
+          "maxItems": 4,
+          "items": { "type": "number" }
+        },
+        "textSnippet": { "type": "string", "maxLength": 80 }
+      },
+      "additionalProperties": false
+    },
+    "Issue": {
+      "type": "object",
+      "required": ["code", "severity", "message"],
+      "properties": {
+        "code": { "type": "string" },
+        "severity": { "type": "string", "enum": ["ERROR", "WARN"] },
+        "message": { "type": "string" }
+      },
+      "additionalProperties": false
+    }
+  }
+}

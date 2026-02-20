@@ -1,0 +1,57 @@
+{
+  "schemaId": "CARTAO_PONTO",
+  "schemaVersion": 1,
+  "ignorePaths": [
+    "jobId",
+    "extractedAt",
+    "days[].dayConfidence",
+    "days[].punches[].source.bbox",
+    "days[].punches[].source.textSnippet"
+  ],
+  "cases": [
+    {
+      "caseId": "CP_0001",
+      "description": "PDF digital layout A",
+      "mode": "AUTO",
+      "inputRef": {
+        "kind": "S3",
+        "storageKey": "golden/cartao_ponto/v1/CP_0001__pdf_digital_layoutA.pdf"
+      },
+      "expectedRef": {
+        "kind": "REPO",
+        "path": "packages/contracts/examples/cartao_ponto/v1/golden/CP_0001__expected.json"
+      }
+    },
+    {
+      "caseId": "CP_0002",
+      "description": "Scan ruim layout A (deve cair em NEEDS_REVIEW dependendo do threshold)",
+      "mode": "AUTO",
+      "inputRef": {
+        "kind": "S3",
+        "storageKey": "golden/cartao_ponto/v1/CP_0002__scan_ruim_layoutA.jpg"
+      },
+      "expectedRef": {
+        "kind": "REPO",
+        "path": "packages/contracts/examples/cartao_ponto/v1/golden/CP_0002__expected.json"
+      },
+      "expectedStatus": "NEEDS_REVIEW"
+    },
+    {
+      "caseId": "CP_0003",
+      "description": "PDF digital layout B (forçando template para teste isolado)",
+      "mode": "FORCE",
+      "forceTemplate": {
+        "templateId": "TEMPLATE_UUID_AQUI",
+        "templateVersion": 1
+      },
+      "inputRef": {
+        "kind": "S3",
+        "storageKey": "golden/cartao_ponto/v1/CP_0003__pdf_digital_layoutB.pdf"
+      },
+      "expectedRef": {
+        "kind": "REPO",
+        "path": "packages/contracts/examples/cartao_ponto/v1/golden/CP_0003__expected.json"
+      }
+    }
+  ]
+}

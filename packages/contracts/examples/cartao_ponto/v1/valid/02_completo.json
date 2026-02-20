@@ -1,0 +1,59 @@
+{
+  "schemaId": "CARTAO_PONTO",
+  "schemaVersion": 1,
+  "jobId": "11111111-2222-4333-8444-555555555555",
+  "extractedAt": "2026-02-20T12:34:56Z",
+  "timezone": "America/Sao_Paulo",
+  "employee": {
+    "name": "Fulano de Tal",
+    "documentId": "000.000.000-00",
+    "employerName": "Empresa X"
+  },
+  "period": {
+    "startDate": "2026-02-01",
+    "endDate": "2026-02-29"
+  },
+  "days": [
+    {
+      "date": "2026-02-01",
+      "punches": [
+        {
+          "time": "08:02",
+          "type": "IN",
+          "source": {
+            "page": 1,
+            "bbox": [
+              100.5,
+              200.2,
+              140.8,
+              214.9
+            ],
+            "textSnippet": "08:02"
+          }
+        },
+        {
+          "time": "12:01",
+          "type": "OUT",
+          "source": {
+            "page": 1
+          }
+        },
+        {
+          "time": "13:00",
+          "type": "IN"
+        },
+        {
+          "time": "18:05",
+          "type": "OUT"
+        }
+      ],
+      "notes": "Batidas capturadas de tabela principal.",
+      "dayConfidence": 0.93,
+      "issues": []
+    }
+  ],
+  "summary": {
+    "totalDays": 1,
+    "daysWithIssues": 0
+  }
+}

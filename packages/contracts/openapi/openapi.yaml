@@ -1,0 +1,426 @@
+openapi: 3.0.3
+info:
+  title: Document Extraction Platform API
+  version: "0.1.0"
+  description: >
+    Plataforma de extração de documentos (schema escolhido pelo integrador; template selecionado automaticamente).
+servers:
+  - url: https://api.example.com
+
+tags:
+  - name: Public
+    description: Endpoints consumidos por backends verticais (machine-to-machine).
+  - name: Admin
+    description: Endpoints internos (catálogo, testes, drafts).
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  parameters:
+    JobId:
+      name: jobId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+
+  schemas:
+    ErrorResponse:
+      type: object
+      required: [errorCode, message]
+      properties:
+        errorCode:
+          type: string
+          example: INVALID_REQUEST
+        message:
+          type: string
+        details:
+          type: object
+          additionalProperties: true
+
+    JobStatus:
+      type: string
+      enum: [QUEUED, RUNNING, DONE, NEEDS_REVIEW, FAILED]
+
+    RequestedBy:
+      type: object
+      description: Contexto "on behalf of" para auditoria. Não altera autorização.
+      properties:
+        userId:
+          type: string
+        email:
+          type: string
+        displayName:
+          type: string
+        sourceApp:
+          type: string
+          description: Identificador da aplicação vertical que originou a requisição.
+
+    CreateJobResponse:
+      type: object
+      required: [jobId, status]
+      properties:
+        jobId:
+          type: string
+          format: uuid
+        status:
+          $ref: '#/components/schemas/JobStatus'
+
+    JobInfoResponse:
+      type: object
+      required: [jobId, status, schemaId, schemaVersion, createdAt]
+      properties:
+        jobId:
+          type: string
+          format: uuid
+        status:
+          $ref: '#/components/schemas/JobStatus'
+        schemaId:
+          type: string
+          example: CARTAO_PONTO
+        schemaVersion:
+          type: integer
+          example: 1
+        confidenceScore:
+          type: number
+          format: float
+          minimum: 0
+          maximum: 1
+          nullable: true
+        selectedTemplate:
+          type: object
+          nullable: true
+          properties:
+            templateId:
+              type: string
+            templateVersion:
+              type: integer
+        createdAt:
+          type: string
+          format: date-time
+        finishedAt:
+          type: string
+          format: date-time
+          nullable: true
+        links:
+          type: object
+          additionalProperties: false
+          properties:
+            result:
+              type: string
+              nullable: true
+            exportXlsx:
+              type: string
+              nullable: true
+
+    ValidationIssue:
+      type: object
+      required: [code, severity, message]
+      properties:
+        code:
+          type: string
+        severity:
+          type: string
+          enum: [ERROR, WARN]
+        message:
+          type: string
+
+    ValidationReport:
+      type: object
+      required: [errors, warnings]
+      properties:
+        errors:
+          type: array
+          items:
+            $ref: '#/components/schemas/ValidationIssue'
+        warnings:
+          type: array
+          items:
+            $ref: '#/components/schemas/ValidationIssue'
+        fieldConfidences:
+          type: object
+          additionalProperties:
+            type: number
+            minimum: 0
+            maximum: 1
+        notes:
+          type: array
+          items:
+            type: string
+
+    # Resultado canônico é schema-dependente.
+    # Para CARTAO_PONTO@v1, referenciamos o JSON Schema no repositório (contracts/schemas).
+    # Aqui, definimos como objeto genérico e descrevemos em docs.
+    SchemaResultGeneric:
+      type: object
+      additionalProperties: true
+
+paths:
+  /v1/jobs:
+    post:
+      tags: [Public]
+      security:
+        - bearerAuth: []
+      summary: Create extraction job
+      description: >
+        Cria um job de extração. O schema é escolhido pelo integrador.
+        O template é selecionado automaticamente pelo motor.
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [schemaId, schemaVersion, files]
+              properties:
+                schemaId:
+                  type: string
+                  example: CARTAO_PONTO
+                schemaVersion:
+                  type: integer
+                  example: 1
+                requestedBy:
+                  $ref: '#/components/schemas/RequestedBy'
+                files:
+                  type: array
+                  items:
+                    type: string
+                    format: binary
+      responses:
+        "201":
+          description: Job created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CreateJobResponse'
+        "400":
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        "401":
+          description: Unauthorized
+        "403":
+          description: Forbidden
+
+  /v1/jobs/{jobId}:
+    get:
+      tags: [Public]
+      security:
+        - bearerAuth: []
+      summary: Get job status
+      parameters:
+        - $ref: '#/components/parameters/JobId'
+      responses:
+        "200":
+          description: Job info
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/JobInfoResponse'
+        "401":
+          description: Unauthorized
+        "403":
+          description: Forbidden
+        "404":
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /v1/jobs/{jobId}/result:
+    get:
+      tags: [Public]
+      security:
+        - bearerAuth: []
+      summary: Get job result (canonical JSON)
+      parameters:
+        - $ref: '#/components/parameters/JobId'
+      responses:
+        "200":
+          description: Canonical schema result
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SchemaResultGeneric'
+        "409":
+          description: Result not ready (job still running/queued)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        "401":
+          description: Unauthorized
+        "403":
+          description: Forbidden
+        "404":
+          description: Not found
+
+  /v1/jobs/{jobId}/export/xlsx:
+    get:
+      tags: [Public]
+      security:
+        - bearerAuth: []
+      summary: Download XLSX export
+      parameters:
+        - $ref: '#/components/parameters/JobId'
+      responses:
+        "200":
+          description: XLSX file
+          content:
+            application/vnd.openxmlformats-officedocument.spreadsheetml.sheet:
+              schema:
+                type: string
+                format: binary
+        "409":
+          description: Export not ready
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        "401":
+          description: Unauthorized
+        "403":
+          description: Forbidden
+        "404":
+          description: Not found
+
+  # -------------------- ADMIN --------------------
+
+  /v1/admin/schemas:
+    get:
+      tags: [Admin]
+      security:
+        - bearerAuth: []
+      summary: List schemas
+      responses:
+        "200":
+          description: Schemas list
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    schemaId:
+                      type: string
+                    description:
+                      type: string
+        "401":
+          description: Unauthorized
+        "403":
+          description: Forbidden
+
+    post:
+      tags: [Admin]
+      security:
+        - bearerAuth: []
+      summary: Create schema
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [schemaId, description]
+              properties:
+                schemaId:
+                  type: string
+                description:
+                  type: string
+      responses:
+        "201":
+          description: Created
+
+  /v1/admin/templates:
+    get:
+      tags: [Admin]
+      security:
+        - bearerAuth: []
+      summary: List templates by schema
+      parameters:
+        - name: schemaId
+          in: query
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Templates list
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    templateId:
+                      type: string
+                    name:
+                      type: string
+                    status:
+                      type: string
+
+  /v1/admin/tests/run:
+    post:
+      tags: [Admin]
+      security:
+        - bearerAuth: []
+      summary: Run extraction test (AUTO or FORCE template)
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [mode, schemaId, schemaVersion, files]
+              properties:
+                mode:
+                  type: string
+                  enum: [AUTO, FORCE]
+                schemaId:
+                  type: string
+                schemaVersion:
+                  type: integer
+                forceTemplate:
+                  type: object
+                  nullable: true
+                  properties:
+                    templateId:
+                      type: string
+                    templateVersion:
+                      type: integer
+                files:
+                  type: array
+                  items:
+                    type: string
+                    format: binary
+      responses:
+        "200":
+          description: Test run report
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  selectedTemplate:
+                    type: object
+                    nullable: true
+                  candidates:
+                    type: array
+                    items:
+                      type: object
+                  confidenceScore:
+                    type: number
+                  validationReport:
+                    $ref: '#/components/schemas/ValidationReport'
+                  result:
+                    $ref: '#/components/schemas/SchemaResultGeneric'
