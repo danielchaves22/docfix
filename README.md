@@ -4,7 +4,8 @@ Scaffold inicial do monorepo para API, worker e console administrativo, conforme
 
 ## Pré-requisitos
 - Node.js 20+
-- pnpm 9+
+- **npm 10+ (caminho padrão de onboarding deste scaffold)**
+- pnpm 9+ (opcional/recomendado quando disponível no ambiente)
 - Python 3.11+
 - Poetry 1.8+
 - Docker + Docker Compose (plugin)
@@ -36,9 +37,25 @@ cd infra
 docker compose down
 ```
 
-## Rodar API localmente
+## Instalar dependências do workspace (Node)
+### Caminho padrão (sem depender de pnpm/corepack)
+```bash
+npm install
+```
+
+### Caminho alternativo (quando pnpm estiver disponível)
 ```bash
 pnpm install
+```
+
+## Rodar API localmente
+### Caminho padrão
+```bash
+npm run dev:api
+```
+
+### Caminho alternativo com pnpm
+```bash
 pnpm dev:api
 ```
 
@@ -50,13 +67,25 @@ poetry run python -m worker
 ```
 
 ## Rodar Admin Console localmente
+### Caminho padrão
 ```bash
-pnpm install
+npm run dev:admin
+```
+
+### Caminho alternativo com pnpm
+```bash
 pnpm dev:admin
 ```
 
 ## Scripts do workspace
-No root do repositório:
+No root do repositório (caminho padrão):
+```bash
+npm run lint
+npm run test
+npm run build
+```
+
+Alternativa equivalente com pnpm (quando disponível):
 ```bash
 pnpm lint
 pnpm test
