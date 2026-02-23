@@ -6,6 +6,15 @@
     "dev": "node -e \"console.log('API scaffold pronto. Implemente o servidor em services/api/src.')\"",
     "lint": "node -e \"console.log('placeholder lint api')\"",
     "test": "node -e \"console.log('placeholder test api')\"",
-    "build": "node -e \"console.log('placeholder build api')\""
+    "build": "node -e \"console.log('placeholder build api')\"",
+    "db:migrate": "DATABASE_URL=${DATABASE_URL:-postgres://docfix:docfix@localhost:5432/docfix} node-pg-migrate -m ./migrations up",
+    "db:migrate:down": "DATABASE_URL=${DATABASE_URL:-postgres://docfix:docfix@localhost:5432/docfix} node-pg-migrate -m ./migrations down",
+    "db:seed": "node ./scripts/db-seed.mjs"
+  },
+  "dependencies": {
+    "pg": "^8.13.1"
+  },
+  "devDependencies": {
+    "node-pg-migrate": "^7.9.1"
   }
 }
