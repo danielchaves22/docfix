@@ -3,18 +3,29 @@
   "private": true,
   "version": "0.1.0",
   "scripts": {
-    "dev": "node -e \"console.log('API scaffold pronto. Implemente o servidor em services/api/src.')\"",
-    "lint": "node -e \"console.log('placeholder lint api')\"",
+    "dev": "tsx watch src/server.ts",
+    "lint": "tsc --noEmit",
     "test": "node -e \"console.log('placeholder test api')\"",
-    "build": "node -e \"console.log('placeholder build api')\"",
+    "build": "tsc -p tsconfig.json",
+    "start": "node dist/server.js",
     "db:migrate": "DATABASE_URL=${DATABASE_URL:-postgres://docfix:docfix@localhost:5432/docfix} node-pg-migrate -m ./migrations up",
     "db:migrate:down": "DATABASE_URL=${DATABASE_URL:-postgres://docfix:docfix@localhost:5432/docfix} node-pg-migrate -m ./migrations down",
     "db:seed": "node ./scripts/db-seed.mjs"
   },
   "dependencies": {
-    "pg": "^8.13.1"
+    "express": "^4.21.1",
+    "minio": "^8.0.2",
+    "multer": "^1.4.5-lts.1",
+    "pg": "^8.13.1",
+    "redis": "^4.7.0"
   },
   "devDependencies": {
-    "node-pg-migrate": "^7.9.1"
+    "@types/express": "^4.17.21",
+    "@types/multer": "^1.4.12",
+    "@types/node": "^22.10.1",
+    "node-pg-migrate": "^7.9.1",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2",
+    "@types/pg": "^8.11.10"
   }
 }
