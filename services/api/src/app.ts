@@ -30,9 +30,46 @@ function normalizeRequestedBy(raw: unknown): Record<string, unknown> | null {
   return null;
 }
 
+function isUuid(value: string): boolean {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
+}
+
 async function resolveSchemaInternalId(client: PoolClient, schemaCode: string): Promise<string | null> {
   const query = await client.query('SELECT id FROM schemas WHERE code = $1 LIMIT 1', [schemaCode]);
   return query.rows[0]?.id ?? null;
+}
+
+async function hasSchemaVersion(client: PoolClient, schemaInternalId: string, schemaVersion: number): Promise<boolean> {
+  const query = await client.query(
+    `
+      SELECT 1
+      FROM schema_versions
+      WHERE schema_id = $1 AND version = $2
+      LIMIT 1
+    `,
+    [schemaInternalId, schemaVersion],
+  );
+
+  return (query.rowCount ?? 0) > 0;
+}
+
+
+async function cleanupCreatedJob(config: ApiConfig, infra: Infra, tenantId: string, jobId: string, storageKeys: string[]): Promise<void> {
+  for (const storageKey of storageKeys) {
+    try {
+      await infra.minioClient.removeObject(config.minio.bucket, storageKey);
+    } catch {
+      // noop: job row cleanup below is the critical path
+    }
+  }
+
+  await infra.pool.query(
+    `
+      DELETE FROM extraction_jobs
+      WHERE id = $1 AND tenant_id = $2
+    `,
+    [jobId, tenantId],
+  );
 }
 
 export function buildApp(config: ApiConfig, infra: Infra, auth: RequestHandler) {
@@ -57,10 +94,17 @@ export function buildApp(config: ApiConfig, infra: Infra, auth: RequestHandler) 
     const requestedBy = normalizeRequestedBy(req.body.requestedBy);
 
     try {
+      const now = new Date().toISOString();
+      const traceId = req.header('x-trace-id') ?? crypto.randomUUID();
       const created = await withTransaction(infra.pool, async (client) => {
         const schemaInternalId = await resolveSchemaInternalId(client, schemaId);
         if (!schemaInternalId) {
           throw new Error('SCHEMA_NOT_FOUND');
+        }
+
+        const versionExists = await hasSchemaVersion(client, schemaInternalId, schemaVersion);
+        if (!versionExists) {
+          throw new Error('SCHEMA_VERSION_NOT_FOUND');
         }
 
         const insertedJob = await client.query(
@@ -74,11 +118,15 @@ export function buildApp(config: ApiConfig, infra: Infra, auth: RequestHandler) 
 
         const jobId = insertedJob.rows[0].id as string;
 
+        const storageKeys: string[] = [];
+
         for (const file of files) {
           const storageKey = `${principal.tenantId}/${jobId}/${crypto.randomUUID()}-${file.originalname}`;
           await infra.minioClient.putObject(config.minio.bucket, storageKey, file.buffer, file.size, {
             'Content-Type': file.mimetype,
           });
+
+          storageKeys.push(storageKey);
 
           await client.query(
             `
@@ -98,24 +146,30 @@ export function buildApp(config: ApiConfig, infra: Infra, auth: RequestHandler) 
           );
         }
 
-        return { jobId, status: insertedJob.rows[0].status as JobStatus };
+        return { jobId, status: insertedJob.rows[0].status as JobStatus, storageKeys };
       });
 
-      const now = new Date().toISOString();
-      const traceId = req.header('x-trace-id') ?? crypto.randomUUID();
-      await infra.redisClient.xAdd(config.jobsStream, '*', {
-        messageType: 'ProcessJob',
-        version: '1',
-        jobId: created.jobId,
-        attempt: '1',
-        traceId,
-        publishedAt: now,
-      });
+      try {
+        await infra.redisClient.xAdd(config.jobsStream, '*', {
+          messageType: 'ProcessJob',
+          version: '1',
+          jobId: created.jobId,
+          attempt: '1',
+          traceId,
+          publishedAt: now,
+        });
+      } catch {
+        await cleanupCreatedJob(config, infra, principal.tenantId, created.jobId, created.storageKeys);
+        return errorResponse(res, 500, 'INTERNAL_ERROR', 'Falha ao criar job.');
+      }
 
-      return res.status(201).json(created);
+      return res.status(201).json({ jobId: created.jobId, status: created.status });
     } catch (error) {
       if (error instanceof Error && error.message === 'SCHEMA_NOT_FOUND') {
         return errorResponse(res, 400, 'INVALID_REQUEST', 'Schema informado não existe.');
+      }
+      if (error instanceof Error && error.message === 'SCHEMA_VERSION_NOT_FOUND') {
+        return errorResponse(res, 400, 'INVALID_REQUEST', 'Versão do schema informada não existe.');
       }
       return errorResponse(res, 500, 'INTERNAL_ERROR', 'Falha ao criar job.');
     }
@@ -128,6 +182,10 @@ export function buildApp(config: ApiConfig, infra: Infra, auth: RequestHandler) 
     }
 
     const { jobId } = req.params;
+    if (!isUuid(jobId)) {
+      return errorResponse(res, 404, 'NOT_FOUND', 'Job não encontrado.');
+    }
+
     const query = await infra.pool.query(
       `
       SELECT
@@ -183,6 +241,10 @@ export function buildApp(config: ApiConfig, infra: Infra, auth: RequestHandler) 
     }
 
     const { jobId } = req.params;
+    if (!isUuid(jobId)) {
+      return errorResponse(res, 404, 'NOT_FOUND', 'Job não encontrado.');
+    }
+
     const query = await infra.pool.query(
       `
       SELECT ej.id, ej.status, jr.result_json
